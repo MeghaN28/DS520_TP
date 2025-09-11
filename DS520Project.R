@@ -224,3 +224,47 @@ xgb.plot.importance(importance_matrix)
 png("xgb_feature_importance.png", width = 1000, height = 600)
 xgb.plot.importance(importance_matrix)
 dev.off()
+
+# -------------------------------
+# 4) MODEL EVALUATION & INTERPRETATION
+# -------------------------------
+ 
+library(Metrics)   # for MAE
+library(caret)     # for R2
+library(SHAPforxgboost)
+ 
+# ---- 4.1 Evaluation Metrics ----
+# MAE
+lm_mae <- mae(test_data$price, lm_pred)
+rf_mae <- mae(test_data$price, rf_pred)
+xgb_mae <- mae(test_data$price, xgb_pred)
+ 
+# R-squared
+lm_r2 <- R2(lm_pred, test_data$price)
+rf_r2 <- R2(rf_pred, test_data$price)
+xgb_r2 <- R2(xgb_pred, test_data$price)
+ 
+# Print results
+cat("\n--- Model Performance ---\n")
+cat(sprintf("Linear Regression -> RMSE: %.2f | MAE: %.2f | R²: %.3f\n", lm_rmse, lm_mae, lm_r2))
+cat(sprintf("Random Forest     -> RMSE: %.2f | MAE: %.2f | R²: %.3f\n", rf_rmse, rf_mae, rf_r2))
+cat(sprintf("XGBoost          -> RMSE: %.2f | MAE: %.2f | R²: %.3f\n", xgb_rmse, xgb_mae, xgb_r2))
+ 
+# ---- 4.2 ±10-15% Accuracy Check ----
+within_10 <- mean(abs((xgb_pred - test_data$price) / test_data$price) <= 0.10) * 100
+within_15 <- mean(abs((xgb_pred - test_data$price) / test_data$price) <= 0.15) * 100
+ 
+cat(sprintf("\nXGBoost: %.1f%% of predictions are within ±10%% of actual price", within_10))
+cat(sprintf("\nXGBoost: %.1f%% of predictions are within ±15%% of actual price\n", within_15))
+ 
+# ---- 4.3 SHAP Values for Interpretability ----
+shap_values <- shap.values(xgb_model, X_train = as.matrix(train_data[, -which(names(train_data) == "price")]))
+shap_long <- shap.prep(shap_contrib = shap_values$shap_score,
+                       X_train = as.matrix(train_data[, -which(names(train_data) == "price")]))
+ 
+# Top features SHAP summary plot
+png("xgb_shap_summary.png", width = 1000, height = 600)
+shap.plot.summary(shap_long)
+dev.off()
+ 
+cat("\nSHAP summary plot saved as xgb_shap_summary.png (top features influencing price).")
