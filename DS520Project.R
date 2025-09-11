@@ -4,12 +4,14 @@ install.packages("ggplot2")
 install.packages("corrplot")
 install.packages("randomForest")
 install.packages("xgboost")
+install.packages("doParallel") # New package for parallel processing
 
 library(caret)
 library(ggplot2)
 library(corrplot)
 library(randomForest)
 library(xgboost)
+library(doParallel) # Load the library
 # Load required library
 library(caret)
 # 2) DATA COLLECTION
@@ -130,58 +132,83 @@ corrplot(cor_matrix, method = "color", type = "upper",
          tl.cex = 0.8, tl.col = "black", addCoef.col = "black")
 dev.off()
 
-# 2.5 Feature importance using Random Forest
 set.seed(123)
-rf_model <- randomForest(price ~ ., data = listings_encoded, ntree = 100, importance = TRUE)
 
-# Save RF feature importance plot
+# Train RF on full encoded data
+listings_encoded_clean <- na.omit(listings_encoded)
+
+# Use parallel processing to speed up Random Forest training
+num_cores <- detectCores() - 1 # Use all but one core
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+# Reduced 'ntree' for faster training
+rf_model <- randomForest(price ~ ., data = listings_encoded_clean, ntree = 100, importance = TRUE)
+varImpPlot(rf_model)
+
+# Stop the parallel cluster when done with Random Forest
+stopCluster(cl)
+registerDoSEQ()
+
+# Save RF feature importance to file
 png("rf_feature_importance.png", width = 1000, height = 600)
 varImpPlot(rf_model)
 dev.off()
+
+# Optional: Faster numeric importance table
+rf_importance <- importance(rf_model)
+rf_importance_sorted <- rf_importance[order(rf_importance[,1], decreasing = TRUE), ]
+print(rf_importance_sorted)
 
 # -------------------------------
 # 3) MODEL BUILDING & TRAINING
 # -------------------------------
 
-# 3.1 Train-test split already done
-# train_data, test_data from previous steps
-
-# 3.2 Linear Regression
+# -------------------------------
+# 3) Linear Regression
+# -------------------------------
 lm_model <- lm(price ~ ., data = train_data)
 summary(lm_model)
 
-# Predictions
 lm_pred <- predict(lm_model, newdata = test_data)
-
-# RMSE
 lm_rmse <- sqrt(mean((test_data$price - lm_pred)^2))
 print(paste("Linear Regression RMSE:", round(lm_rmse, 2)))
 
-# 3.3 Random Forest Regression
-rf_model2 <- randomForest(price ~ ., data = train_data, ntree = 200, mtry = 5)
+# -------------------------------
+# 4) Random Forest Regression
+# -------------------------------
+set.seed(123)
+# Reduced 'ntree' for faster training
+rf_model2 <- randomForest(price ~ ., data = train_data, ntree = 100, mtry = 5)
 rf_pred <- predict(rf_model2, newdata = test_data)
 rf_rmse <- sqrt(mean((test_data$price - rf_pred)^2))
 print(paste("Random Forest RMSE:", round(rf_rmse, 2)))
 
-# Hyperparameter tuning (Random Forest)
-rf_grid <- expand.grid(mtry = c(3, 5, 7))
-train_control <- trainControl(method = "cv", number = 5)
+# Hyperparameter tuning with caret
+rf_grid <- expand.grid(mtry = c(3, 5)) # Reduced search grid
+train_control <- trainControl(method = "cv", number = 3) # Reduced cross-validation folds
 rf_tuned <- train(price ~ ., data = train_data, method = "rf",
-                  tuneGrid = rf_grid, trControl = train_control, ntree = 200)
+                  tuneGrid = rf_grid, trControl = train_control, ntree = 50) # Reduced ntree for tuning
 print(rf_tuned)
 
-# 3.4 XGBoost Regression
-# Prepare matrix for XGBoost
+# -------------------------------
+# 5) XGBoost Regression
+# -------------------------------
+# Prepare data for XGBoost
 train_matrix <- xgb.DMatrix(data = as.matrix(train_data[, -which(names(train_data) == "price")]),
                             label = train_data$price)
 test_matrix <- xgb.DMatrix(data = as.matrix(test_data[, -which(names(test_data) == "price")]),
                            label = test_data$price)
 
 # Train XGBoost model
-xgb_model <- xgboost(data = train_matrix, max.depth = 6, eta = 0.1, nrounds = 100,
-                     objective = "reg:squarederror", verbose = 0)
+set.seed(123)
+# Further reduced 'nrounds' and 'max.depth' for faster training
+# Increased eta slightly to compensate for the reduced nrounds
+# Added 'nthread' for explicit parallel processing
+xgb_model <- xgboost(data = train_matrix, max.depth = 4, eta = 0.2, nrounds = 30,
+                     objective = "reg:squarederror", verbose = 0, nthread = 4)
 
-# Predictions
+# Predictions & RMSE
 xgb_pred <- predict(xgb_model, test_matrix)
 xgb_rmse <- sqrt(mean((test_data$price - xgb_pred)^2))
 print(paste("XGBoost RMSE:", round(xgb_rmse, 2)))
@@ -189,6 +216,9 @@ print(paste("XGBoost RMSE:", round(xgb_rmse, 2)))
 # Feature importance for XGBoost
 importance_matrix <- xgb.importance(feature_names = colnames(train_data[, -which(names(train_data) == "price")]),
                                     model = xgb_model)
+
+# Display importance
+xgb.plot.importance(importance_matrix)
 
 # Save XGBoost importance plot
 png("xgb_feature_importance.png", width = 1000, height = 600)
